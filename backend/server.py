@@ -12,7 +12,18 @@ import random
 import smtplib
 from flask_cors import CORS
 from pymongo import MongoClient
+import feedparser
+from dotenv import load_dotenv
+import requests
+import logging
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 
+
+
+
+load_dotenv()
 app = Flask(__name__)
 socketio = SocketIO(app)
 CORS(app)  
@@ -31,6 +42,13 @@ LOG_FILE = "logs.json"
 CSV_FILE = "logs_export.csv"
 STATS_FILE = "stats.json"
 
+# RSS feed URLs
+RSS_FEED_URLS = [
+    "https://thehackernews.com/feeds/posts/default",  # Example: The Hacker News
+    "https://www.bleepingcomputer.com/feed/",  # Example: Bleeping Computer
+    "https://www.securityweek.com/rss",  # Security Week
+    # Add more RSS URLs here
+]
 
 
 
@@ -179,8 +197,36 @@ def classify_threat(event_code, message):
     return severity, reason, action, prediction["score"]
 
 
+def send_simple_message():
+    sender_email = "threatdetectai@gmail.com"
+    sender_password = "ncisbzykghiaryzc"  # ⚠️ Use an App Password, NOT your Gmail password
+    receiver_email = "gichinga03@gmail.com"
 
-# ✅ API to Receive Logs
+    subject = "🚨 High Severity Threat Detected!"
+    body = (
+        "A high severity threat has been detected on your system.\n"
+        "Please check the threat detection dashboard immediately."
+    )
+
+    msg = MIMEMultipart()
+    msg["From"] = sender_email
+    msg["To"] = receiver_email
+    msg["Subject"] = subject
+    msg.attach(MIMEText(body, "plain"))
+
+    try:
+        with smtplib.SMTP("smtp.gmail.com", 587) as server:
+            server.starttls()
+            server.login(sender_email, sender_password)
+            server.sendmail(sender_email, receiver_email, msg.as_string())
+        print("[📧] Alert email sent successfully!")
+    except Exception as e:
+        print(f"[⚠️] Failed to send alert email: {e}")
+
+
+
+
+
 @app.route("/add_log", methods=["POST"])
 def add_log():
     logs = load_json(LOG_FILE)
@@ -205,9 +251,13 @@ def add_log():
     
     if severity == "High":
         socketio.emit("alert", {"message": f"🚨 {reason} - {action}"})
+        try:
+            send_simple_message()
+            print("[📧] Alert email sent successfully!")
+        except Exception as e:
+            print(f"[⚠️] Failed to send alert email: {e}")
 
     return jsonify({"message": "Log stored", "severity": severity}), 201
-
 
 
 
@@ -311,6 +361,35 @@ def user_settings():
 
 
 
+@app.route("/api/rss", methods=["GET"])
+def fetch_rss():
+    rss_data = []
+
+    try:
+        for url in RSS_FEED_URLS:
+            feed = feedparser.parse(url)
+            articles = []
+
+            for entry in feed.entries:
+                articles.append({
+                    "title": entry.title,
+                    "link": entry.link,
+                    "pubDate": entry.published,
+                    "description": entry.summary,
+                })
+
+            rss_data.append({
+                "source": url,
+                "articles": articles
+            })
+        
+        return jsonify(rss_data), 200
+
+    except Exception as e:
+        return jsonify({"message": "Failed to fetch RSS feeds", "error": str(e)}), 500
+
+
+
 # Route to check if the server is online
 @app.route('/')
 def home():
@@ -319,4 +398,4 @@ def home():
 
 if __name__ == "__main__":
     print("[🌐] Server Running at http://127.0.0.1:5000")
-    socketio.run(app, host="127.0.0.1", port=5000, debug=True)
+    socketio.run(app, host="0.0.0.0", port=5000, debug=True)
