@@ -1,29 +1,18 @@
 import React, { useState } from "react";
-import axios from "axios";
-import fs from "fs";
+import { signInWithEmailAndPassword } from "firebase/auth";
+import { auth } from "./firebase";
 
 const Auth = () => {
   const [email, setEmail] = useState("");
-  const [computerName, setComputerName] = useState("");
+  const [password, setPassword] = useState("");
   const [message, setMessage] = useState("");
 
   const handleLogin = async () => {
     try {
-      const response = await axios.post("http://127.0.0.1:5000/authenticate", {
-        email,
-        computer_name: computerName,
-      });
-
-      if (response.status === 200) {
-        // Save email to config.json
-        fs.writeFileSync("config.json", JSON.stringify({ email }, null, 4));
-
-        setMessage("Login Successful! You can close this window.");
-      } else {
-        setMessage("Authentication failed. Please try again.");
-      }
-    } catch (error) {
-      setMessage("Error: Unable to authenticate.");
+      await signInWithEmailAndPassword(auth, email, password);
+      setMessage("Login Successful! You can close this window.");
+    } catch (error: any) {
+      setMessage("Authentication failed. Please try again.");
     }
   };
 
@@ -38,10 +27,10 @@ const Auth = () => {
         className="mb-2 p-2 border border-gray-600 rounded"
       />
       <input
-        type="text"
-        placeholder="Enter your computer name"
-        value={computerName}
-        onChange={(e) => setComputerName(e.target.value)}
+        type="password"
+        placeholder="Enter your password"
+        value={password}
+        onChange={(e) => setPassword(e.target.value)}
         className="mb-2 p-2 border border-gray-600 rounded"
       />
       <button

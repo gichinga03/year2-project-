@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, render_template, send_file
+from flask import Flask, request, jsonify, render_template, send_file, Response
 from flask_socketio import SocketIO, emit
 import json
 import datetime
@@ -19,6 +19,7 @@ import logging
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+import subprocess
 
 
 
@@ -90,77 +91,6 @@ def save_json(filename, data):
         json.dump(data, file, indent=4)
 
 
-# ✅ User Registration
-@app.route("/register", methods=["POST"])
-def register_page():
-    data = request.json
-    first_name = data.get("first_name")
-    second_name = data.get("second_name")
-    last_name = data.get("last_name")
-    email = data.get("email")
-    username = data.get("username")
-    computer_name = data.get("computer_name")
-    virus_total_api = data.get("virus_total_api", None)  # Optional
-    other_computers = data.get("other_computers", [])  # Optional
-    
-    # Check if username already exists in MongoDB
-    existing_user = users_collection.find_one({"username": username})
-    if existing_user:
-        return jsonify({"error": "Username already exists"}), 400
-    
-    # Create a new user object
-    new_user = {
-        "first_name": first_name,
-        "second_name": second_name,
-        "last_name": last_name,
-        "email": email,
-        "username": username,
-        "computer_name": computer_name,
-        "virus_total_api": virus_total_api,
-        "other_computers": other_computers,
-        "created_at": datetime.datetime.utcnow()
-    }
-    
-    try:
-        users_collection.insert_one(new_user)
-        return jsonify({"message": "Registration successful"}), 201
-    except Exception as e:
-        print(f"Error saving to MongoDB: {str(e)}")
-        return jsonify({"error": "Failed to register user"}), 500
-
-# ✅ Login - Verify Email & Computer Name
-@app.route("/login", methods=["POST"])
-def login():
-    data = request.json
-    email = data.get("email")
-    computer_name = data.get("computer_name")
-
-    user = users_collection.find_one({"email": email})
-
-    if not user:
-        return jsonify({"error": "Invalid credentials"}), 401
-
-    stored_computer_name = user["computer_name"]
-
-    if stored_computer_name != computer_name:
-        return jsonify({"error": "Invalid credentials"}), 401
-
-    return jsonify({"message": "Login successful", "status": "success"}), 200
-
-
-
-@app.route("/authenticate", methods=["POST"])
-def authenticate():
-    data = request.json
-    email = data.get("email")
-    computer_name = data.get("computer_name")
-
-    user = users_collection.find_one({"email": email})
-
-    if user and user["computer_name"] == computer_name:
-        return jsonify({"message": "Authentication successful"}), 200
-    return jsonify({"error": "Unauthorized"}), 401
-
 
 
 #  Save logs to file
@@ -197,14 +127,23 @@ def classify_threat(event_code, message):
     return severity, reason, action, prediction["score"]
 
 
-def send_simple_message():
+def send_simple_message(log_entry):
     sender_email = "threatdetectai@gmail.com"
     sender_password = "ncisbzykghiaryzc"  # ⚠️ Use an App Password, NOT your Gmail password
     receiver_email = "gichinga03@gmail.com"
 
     subject = "🚨 High Severity Threat Detected!"
     body = (
-        "A high severity threat has been detected on your system.\n"
+        "A high severity threat has been detected on your system.\n\n"
+        f"Event Code: {log_entry.get('event_code')}\n"
+        f"Provider Name: {log_entry.get('provider_name')}\n"
+        f"Computer Name: {log_entry.get('computer_name')}\n"
+        f"Message: {log_entry.get('message')}\n"
+        f"Severity: {log_entry.get('severity')}\n"
+        f"Reason: {log_entry.get('reason')}\n"
+        f"Suggested Action: {log_entry.get('suggested_action')}\n"
+        f"AI Confidence: {log_entry.get('ai_confidence')}\n"
+        f"Timestamp: {log_entry.get('timestamp')}\n\n"
         "Please check the threat detection dashboard immediately."
     )
 
@@ -222,8 +161,6 @@ def send_simple_message():
         print("[📧] Alert email sent successfully!")
     except Exception as e:
         print(f"[⚠️] Failed to send alert email: {e}")
-
-
 
 
 
@@ -252,7 +189,7 @@ def add_log():
     if severity == "High":
         socketio.emit("alert", {"message": f"🚨 {reason} - {action}"})
         try:
-            send_simple_message()
+            send_simple_message(log_entry)
             print("[📧] Alert email sent successfully!")
         except Exception as e:
             print(f"[⚠️] Failed to send alert email: {e}")
@@ -305,60 +242,6 @@ def receive_stats():
     return jsonify({"status": "success"}), 200
 
 
-#settings user page 
-
-
-# Function to handle user settings
-@app.route("/settings", methods=["GET", "POST"])
-def user_settings():
-    if request.method == "GET":
-        username = request.args.get("username")
-        if not username:
-            return jsonify({"error": "Username is required"}), 400
-            
-        user = users_collection.find_one({"username": username})
-        if not user:
-            return jsonify({"error": "User not found"}), 404
-            
-        # Remove sensitive data before sending
-        user.pop("_id", None)
-        return jsonify(user)
-        
-    # Handle POST request for updates
-    data = request.json
-    username = data.get("username")
-    
-    # Find the user by username in the database
-    user = users_collection.find_one({"username": username})
-    
-    if not user:
-        return jsonify({"error": "User not found"}), 404
-    
-    # Update user information based on the provided data
-    update_data = {}
-    if "new_password" in data:
-        update_data["password"] = data["new_password"]
-    if "new_email" in data:
-        update_data["email"] = data["new_email"]
-    if "first_name" in data:
-        update_data["first_name"] = data["first_name"]
-    if "second_name" in data:
-        update_data["second_name"] = data["second_name"]
-    if "last_name" in data:
-        update_data["last_name"] = data["last_name"]
-    if "virus_total_api" in data:
-        update_data["virus_total_api"] = data["virus_total_api"]
-    if "other_computers" in data:
-        update_data["other_computers"] = data["other_computers"]
-    
-    # Update the user's settings in the database
-    users_collection.update_one(
-        {"username": username}, 
-        {"$set": update_data}
-    )
-    
-    return jsonify({"message": "Settings updated successfully"})
-
 
 
 @app.route("/api/rss", methods=["GET"])
@@ -394,6 +277,45 @@ def fetch_rss():
 @app.route('/')
 def home():
     return jsonify({"status": "Server is online"}), 200
+
+
+@app.route('/train_ai_stream')
+def train_ai_stream():
+    def generate():
+        process = subprocess.Popen(
+            ["python", "../trainingAI/train/sent.py"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            bufsize=1,
+            universal_newlines=True
+        )
+        for line in iter(process.stdout.readline, ''):
+            yield f"data: {line}\n\n"
+        process.stdout.close()
+        process.wait()
+    return Response(generate(), mimetype='text/event-stream')
+
+
+# New endpoint to fetch all users
+@app.route("/api/users", methods=["GET"])
+def get_users():
+    try:
+        users = list(users_collection.find({}, {"_id": 0, "password": 0}))
+        return jsonify(users)
+    except Exception as e:
+        return jsonify({"error": "Failed to fetch users"}), 500
+
+
+# New endpoint to delete a user by email
+@app.route("/api/users/<email>", methods=["DELETE"])
+def delete_user(email):
+    try:
+        result = users_collection.delete_one({"email": email})
+        if result.deleted_count == 0:
+            return jsonify({"error": "User not found"}), 404
+        return jsonify({"message": "User deleted"})
+    except Exception as e:
+        return jsonify({"error": "Failed to delete user"}), 500
 
 
 if __name__ == "__main__":
